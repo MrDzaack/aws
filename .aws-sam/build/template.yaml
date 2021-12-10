@@ -4,9 +4,9 @@ Parameters:
   AppName:
     Type: String
     Default: campus-app
-Stage:
-  Type: String
-  Default: dev
+  Stage:
+    Type: String
+    Default: dev
 Resources:
   Api:
     Type: AWS::Serverless::Api
@@ -19,23 +19,22 @@ Resources:
       Name:
         Fn::Sub: ${AppName}-api-${Stage}
       StageName:
-        Ref: Stage
+        Fn::Sub: ${Stage}
       DefinitionBody:
         Fn::Transform:
           Name: AWS::Include
           Parameters:
-            Location: ../../specification/donne_api.yml
-  GetDevices:
-    Type: AWS::Serverless::Function
-    Properties:
-      Tracing: Active
-      Runtime: python3.8
-      PackageType: Zip
-      FunctionName:
-        Fn::Sub: ${AppName}-get-devices-${Stage}
-      Description: Get the list of devices
-      CodeUri: GetDevices
-      Handler: devices.get_devices
+            Location: ../../specification/openapi-specification.yml
+      Auth:
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          Quota:
+            Limit: 5000
+            Period: MONTH
+          Throttle:
+            BurstLimit: 200
+            RateLimit: 100
+        ApiKeyRequired: 'true'
   ApiRole:
     Type: AWS::IAM::Role
     Properties:
@@ -51,10 +50,10 @@ Resources:
             Service:
             - apigateway.amazonaws.com
           Action: sts:AssumeRole
-        Policies:
-        - PolicyName: null
+      Policies:
+      - PolicyName:
           Fn::Sub: ${AppName}-api-execution-role-policy-${Stage}
-          PolicyDocument: null
+        PolicyDocument:
           Version: '2012-10-17'
           Statement:
           - Effect: Allow
@@ -62,3 +61,77 @@ Resources:
             - lambda:InvokeFunction
             Resource:
               Fn::Sub: ${GetDevices.Arn}
+  GetDevicesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path:
+        Fn::Sub: /${Stage}/${AppName}/serviceRoles/
+      RoleName:
+        Fn::Sub: ${AppName}-get-devices-role-${Stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName:
+          Fn::Sub: ${AppName}-get-devices-role-policy-dynamo-${Stage}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:GetItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            Resource:
+              Fn::Sub: ${DevicesTable.Arn}
+      - PolicyName:
+          Fn::Sub: ${AppName}-get-devices-role-policy-logs-${Stage}
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+  DevicesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AppName}-table-devices-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+  GetDevicesLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn:
+    - GetDevices
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${GetDevices}
+      RetentionInDays: 7
+  GetDevices:
+    Type: AWS::Serverless::Function
+    Properties:
+      Tracing: Active
+      Runtime: python3.8
+      PackageType: Zip
+      FunctionName:
+        Fn::Sub: ${AppName}-get-devices-${Stage}
+      Description: Get the list of devices
+      CodeUri: GetDevices
+      Handler: handler.get_devices
+      Role:
+        Fn::Sub: ${GetDevicesRole.Arn}
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: DevicesTable
